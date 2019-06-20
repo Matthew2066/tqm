@@ -55,28 +55,19 @@ interface CitizenInterface {
     makeRefFunction(refFunction: Function): string
 }
 
-declare var Citizen: CitizenInterface;
+declare const Citizen: CitizenInterface;
 
 declare function addRawEventListener(eventName: string, callback: Function): void
 
 declare function addEventListener(eventName: string, callback: Function, netSafe?: boolean): void
 declare function on(eventName: string, callback: Function): void
-declare function AddEventHandler(eventName: string, callback: Function): void
 
 declare function addNetEventListener(eventName: string, callback: Function): void
 declare function onNet(eventName: string, callback: Function): void
 
 declare function emit(eventName: string, ...args: any[]): void
-declare function TriggerEvent(eventName: string, ...args: any[]): void
-
 declare function emitNet(eventName: string, ...args: any[]): void
-declare function TriggerServerEvent(eventName: string, ...args: any[]): void
-
-declare function emitNet(eventName: string, target: number|string, ...args: any[]): void
-declare function TriggerClientEvent(eventName: string, target: number|string, ...args: any[]): void
 
 declare function removeEventListener(eventName: string, callback: Function): void
 
 declare function setTick(callback: Function): void
-
-declare var exports: any;

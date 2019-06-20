@@ -48,8 +48,6 @@ function Citizen.CreateThreadNow(threadFunction)
 	return coroutine.status(coro) ~= 'dead'
 end
 
-local inNext
-
 function Citizen.Await(promise)
 	if not curThread then
 		error("Current execution context is not in the scheduler, you should use CreateThread / SetTimeout or Event system (AddEventHandler) to be able to Await")
@@ -62,21 +60,8 @@ function Citizen.Await(promise)
 
 	curThreadIndex = nil
 	local resumableThread = curThread
-	
-	inNext = true
-	local nextResult
-	local nextErr
-	local resolved
-	
+
 	promise:next(function (result)
-		-- was already resolved? then resolve instantly
-		if inNext then
-			nextResult = result
-			resolved = true
-			
-			return
-		end
-	
 		-- Reattach thread
 		table.insert(threads, resumableThread)
 
@@ -92,41 +77,12 @@ function Citizen.Await(promise)
 		return result
 	end, function (err)
 		if err then
-			-- if already rejected, handle rejection instantly
-			if inNext then
-				nextErr = err
-				resolved = true
-				
-				return
-			end
-			
-			-- resume with error
-			local result, coroErr = coroutine.resume(resumableThread.coroutine, nil, err)
-			
-			if coroErr then
-				Citizen.Trace('Await failure: ' .. debug.traceback(resumableThread.coroutine, coroErr, 2))
-			end
+			Citizen.Trace('Await failure: ' .. debug.traceback(resumableThread.coroutine, err, 2))
 		end
 	end)
-	
-	inNext = false
-	
-	if resolved then
-		if nextErr then
-			error(nextErr)
-		end
-	
-		return nextResult
-	end
-	
+
 	curThread = nil
-	local result, err = coroutine.yield()
-	
-	if err then
-		error(err)
-	end
-	
-	return result
+	return coroutine.yield()
 end
 
 -- SetTimeout
@@ -186,9 +142,6 @@ Citizen.SetEventRoutine(function(eventName, eventPayload, eventSource)
 
 	-- try finding an event handler for the event
 	local eventHandlerEntry = eventHandlers[eventName]
-	
-	-- deserialize the event structure (so that we end up adding references to delete later on)
-	local data = msgpack.unpack(eventPayload)
 
 	if eventHandlerEntry and eventHandlerEntry.handlers then
 		-- if this is a net event and we don't allow this event to be triggered from the network, return
@@ -202,6 +155,9 @@ Citizen.SetEventRoutine(function(eventName, eventPayload, eventSource)
 			deserializingNetEvent = { source = eventSource }
 			_G.source = tonumber(eventSource:sub(5))
 		end
+
+		-- if we found one, deserialize the data structure
+		local data = msgpack.unpack(eventPayload)
 
 		-- return an empty table if the data is nil
 		if not data then
@@ -242,8 +198,6 @@ function AddEventHandler(eventName, eventRoutine)
 
 	eventKey = eventKey + 1
 	tableEntry.handlers[eventKey] = eventRoutine
-
-	RegisterResourceAsEventHandler(eventName)
 
 	return {
 		key = eventKey,
@@ -348,39 +302,31 @@ local funcRefIdx = 0
 local function MakeFunctionReference(func)
 	local thisIdx = funcRefIdx
 
-	funcRefs[thisIdx] = {
-		func = func,
-		refs = 0
-	}
+	funcRefs[thisIdx] = func
 
 	funcRefIdx = funcRefIdx + 1
 
-	local refStr = Citizen.CanonicalizeRef(thisIdx)
-	return refStr
+	return Citizen.CanonicalizeRef(thisIdx)
 end
 
 function Citizen.GetFunctionReference(func)
 	if type(func) == 'function' then
 		return MakeFunctionReference(func)
-	elseif type(func) == 'table' and rawget(func, '__cfx_functionReference') then
-		return MakeFunctionReference(function(...)
-			return func(...)
-		end)
+	elseif type(func) == 'table' and rawget(table, '__cfx_functionReference') then
+		return DuplicateFunctionReference(rawget(table, '__cfx_functionReference'))
 	end
 
 	return nil
 end
 
 Citizen.SetCallRefRoutine(function(refId, argsSerialized)
-	local refPtr = funcRefs[refId]
+	local ref = funcRefs[refId]
 
-	if not refPtr then
+	if not ref then
 		Citizen.Trace('Invalid ref call attempt: ' .. refId .. "\n")
 
 		return msgpack.pack({})
 	end
-	
-	local ref = refPtr.func
 
 	local err
 	local retvals
@@ -419,28 +365,19 @@ Citizen.SetDuplicateRefRoutine(function(refId)
 	local ref = funcRefs[refId]
 
 	if ref then
-		--print(('%s %s ref %d - new refcount %d (from %s)'):format(GetCurrentResourceName(), 'duplicating', refId, ref.refs + 1, GetInvokingResource() or 'nil'))
-	
-		ref.refs = ref.refs + 1
+		local thisIdx = funcRefIdx
+		funcRefs[thisIdx] = ref
 
-		return refId
+		funcRefIdx = funcRefIdx + 1
+
+		return thisIdx
 	end
 
 	return -1
 end)
 
 Citizen.SetDeleteRefRoutine(function(refId)
-	local ref = funcRefs[refId]
-	
-	if ref then
-		--print(('%s %s ref %d - new refcount %d (from %s)'):format(GetCurrentResourceName(), 'deleting', refId, ref.refs - 1, GetInvokingResource() or 'nil'))
-	
-		ref.refs = ref.refs - 1
-		
-		if ref.refs <= 0 then
-			funcRefs[refId] = nil
-		end
-	end
+	funcRefs[refId] = nil
 end)
 
 local EXT_FUNCREF = 10
@@ -453,9 +390,7 @@ end
 msgpack.packers['table'] = function(buffer, table)
 	if rawget(table, '__cfx_functionReference') then
 		-- pack as function reference
-		msgpack.packers['function'](buffer, function(...)
-			return table(...)
-		end)
+		msgpack.packers['funcref'](buffer, DuplicateFunctionReference(rawget(table, '__cfx_functionReference')))
 	else
 		msgpack.packers['_table'](buffer, table)
 	end
@@ -649,33 +584,9 @@ local funcref_mt = {
 	end
 }
 
-local EXT_VECTOR2 = 20
-local EXT_VECTOR3 = 21
-local EXT_VECTOR4 = 22
-local EXT_QUAT = 23
-
-msgpack.packers['vector2'] = function(buffer, vec)
-	msgpack.packers['ext'](buffer, EXT_VECTOR2, string.pack('<ff', vec.x, vec.y))
-end
-
-msgpack.packers['vector3'] = function(buffer, vec)
-	msgpack.packers['ext'](buffer, EXT_VECTOR3, string.pack('<fff', vec.x, vec.y, vec.z))
-end
-
-msgpack.packers['vector4'] = function(buffer, vec)
-	msgpack.packers['ext'](buffer, EXT_VECTOR4, string.pack('<ffff', vec.x, vec.y, vec.z, vec.w))
-end
-
-msgpack.packers['quat'] = function(buffer, vec)
-	msgpack.packers['ext'](buffer, EXT_QUAT, string.pack('<ffff', vec.x, vec.y, vec.z, vec.w))
-end
-
 msgpack.build_ext = function(tag, data)
 	if tag == EXT_FUNCREF or tag == EXT_LOCALFUNCREF then
 		local ref = data
-		
-		-- add a reference
-		DuplicateFunctionReference(ref)
 
 		local tbl = {
 			__cfx_functionReference = ref,
@@ -689,22 +600,6 @@ msgpack.build_ext = function(tag, data)
 		tbl = setmetatable(tbl, funcref_mt)
 
 		return tbl
-	elseif tag == EXT_VECTOR2 then
-		local x, y = string.unpack('<ff', data)
-	
-		return vector2(x, y)
-	elseif tag == EXT_VECTOR3 then
-		local x, y, z = string.unpack('<fff', data)
-	
-		return vector3(x, y, z)
-	elseif tag == EXT_VECTOR4 then
-		local x, y, z, w = string.unpack('<ffff', data)
-	
-		return vector4(x, y, z, w)
-	elseif tag == EXT_QUAT then
-		local x, y, z, w = string.unpack('<ffff', data)
-	
-		return quat(w, x, y, z)
 	end
 end
 
@@ -727,9 +622,7 @@ AddEventHandler(('on%sResourceStart'):format(IsDuplicityVersion() and 'Server' o
 
 			AddEventHandler(getExportEventName(resource, exportName), function(setCB)
 				-- get the entry from *our* global table and invoke the set callback
-				if _G[exportName] then
-					setCB(_G[exportName])
-				end
+				setCB(_G[exportName])
 			end)
 		end
 	end
@@ -782,12 +675,6 @@ setmetatable(exports, {
 
 	__newindex = function(t, k, v)
 		error('cannot set values on exports')
-	end,
-
-	__call = function(t, exportName, func)
-		AddEventHandler(getExportEventName(GetCurrentResourceName(), exportName), function(setCB)
-			setCB(func)
-		end)
 	end
 })
 
