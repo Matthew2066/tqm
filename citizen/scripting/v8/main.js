@@ -1,4 +1,6 @@
 // CFX JS runtime
+/// <reference path="./natives_blank.d.ts" />
+/// <reference path="./natives_server.d.ts" />
 
 const EXT_FUNCREF = 10;
 const EXT_LOCALFUNCREF = 11;
@@ -10,13 +12,15 @@ const EXT_LOCALFUNCREF = 11;
 
 	const codec = msgpack.createCodec({
 		uint8array: true,
-		preset: false
+		preset: false,
+		binarraybuffer: true
 	});
 
 	const pack = data => msgpack.encode(data, { codec });
 	const unpack = data => msgpack.decode(data, { codec });
 	
 	// store for use by natives.js
+	global.msgpack_pack = pack;
 	global.msgpack_unpack = unpack;
 
 	/**
@@ -26,7 +30,10 @@ const EXT_LOCALFUNCREF = 11;
 	Citizen.makeRefFunction = (refFunction) => {
 		const ref = nextRefIdx();
 
-		refFunctionsMap.set(ref, refFunction);
+		refFunctionsMap.set(ref, {
+			callback: refFunction,
+			refCount: 0
+		});
 
 		return Citizen.canonicalizeRef(ref);
 	};
@@ -38,8 +45,19 @@ const EXT_LOCALFUNCREF = 11;
 	}
 
 	function refFunctionUnpacker(refSerialized) {
+		const fnRef = Citizen.makeFunctionReference(refSerialized);
+	
 		return function (...args) {
-			return unpack(Citizen.invokeFunctionReference(refSerialized, pack(args)));
+			const retvals = unpack(fnRef(pack(args)));
+
+			switch (retvals.length) {
+				case 0:
+					return undefined;
+				case 1:
+					return retvals[0];
+				default:
+					return retvals;
+			}
 		};
 	}
 
@@ -53,7 +71,13 @@ const EXT_LOCALFUNCREF = 11;
 	 * @param {int} ref
 	 */
 	Citizen.setDeleteRefFunction(function(ref) {
-		refFunctionsMap.delete(ref);
+		if (refFunctionsMap.has(ref)) {
+			const data = refFunctionsMap.get(ref);
+			
+			if (--data.refCount <= 0) {		
+				refFunctionsMap.delete(ref);
+			}
+		}
 	});
 
 	/**
@@ -69,7 +93,7 @@ const EXT_LOCALFUNCREF = 11;
 			return pack([]);
 		}
 
-		return pack([refFunctionsMap.get(ref)(...unpack(argsSerialized))]);
+		return pack([refFunctionsMap.get(ref).callback(...unpack(argsSerialized))]);
 	});
 
 	/**
@@ -80,11 +104,9 @@ const EXT_LOCALFUNCREF = 11;
 	Citizen.setDuplicateRefFunction(function(ref) {
 		if (refFunctionsMap.has(ref)) {
 			const refFunction = refFunctionsMap.get(ref);
-			const newRef = nextRefIdx();
+			++refFunction.refCount;
 
-			refFunctionsMap.set(newRef, refFunction);
-
-			return newRef;
+			return ref;
 		}
 
 		return -1;
@@ -104,6 +126,8 @@ const EXT_LOCALFUNCREF = 11;
 		if (netSafe) {
 			netSafeEventNames.add(name);
 		}
+		
+		RegisterResourceAsEventHandler(name);
 
 		emitter.on(name, callback);
 	};
@@ -115,16 +139,38 @@ const EXT_LOCALFUNCREF = 11;
 
 	global.removeEventListener = emitter.off.bind(emitter);
 
+	// Convenience aliases for Lua similarity
+	global.AddEventHandler = global.addEventListener;
+	global.RegisterNetEvent = (name) => void netSafeEventNames.add(name);
+	global.RegisterServerEvent = global.RegisterNetEvent;
+	global.RemoveEventHandler = global.removeEventListener;
+
+	// Event triggering
 	global.emit = (name, ...args) => {
 		const dataSerialized = pack(args);
 
-		Citizen.invokeNative('0x91310870', name, dataSerialized, dataSerialized.length);
+		TriggerEventInternal(name, dataSerialized, dataSerialized.length);
 	};
-	global.emitNet = (name, ...args) => {
-		const dataSerialized = pack(args);
 
-		Citizen.invokeNative('0x7fdd1128', name, dataSerialized, dataSerialized.length);
-	};
+	global.TriggerEvent = global.emit;
+
+	if (IsDuplicityVersion()) {
+		global.emitNet = (name, source, ...args) => {
+			const dataSerialized = pack(args);
+	
+			TriggerClientEventInternal(name, source, dataSerialized, dataSerialized.length);
+		};
+
+		global.TriggerClientEvent = global.emitNet;
+	} else {
+		global.emitNet = (name, ...args) => {
+			const dataSerialized = pack(args);
+	
+			TriggerServerEventInternal(name, dataSerialized, dataSerialized.length);
+		};
+
+		global.TriggerServerEvent = global.emitNet;
+	}
 
 	/**
 	 * @param {string} name
@@ -171,4 +217,96 @@ const EXT_LOCALFUNCREF = 11;
 
 		global.source = null;
 	});
+
+	// Compatibility layer for legacy exports
+	const exportsCallbackCache = {};
+	const exportKey = (IsDuplicityVersion()) ? 'server_export' : 'export';
+	const eventType = (IsDuplicityVersion() ? 'Server' : 'Client');
+
+	const getExportEventName = (resource, name) => `__cfx_export_${resource}_${name}`;
+
+	on(`on${eventType}ResourceStart`, (resource) => {
+		if (resource === GetCurrentResourceName()) {
+			const numMetaData = GetNumResourceMetadata(resource, exportKey) || 0;
+
+			for (let i = 0; i < numMetaData; i++) {
+				const exportName = GetResourceMetadata(resource, exportKey, i);
+
+				on(getExportEventName(resource, exportName), (setCB) => {
+					if (global[exportName]) {
+						setCB(global[exportName]);
+					}
+				});
+			}
+		}
+	});
+
+	on(`on${eventType}ResourceStop`, (resource) => {
+		exportsCallbackCache[resource] = {};
+	});
+
+	// export invocation
+	const createExports = () => {
+		return new Proxy(() => {}, {
+			get(t, k) {
+				const resource = k;
+
+				return new Proxy({}, {
+					get(t, k) {
+						if (!exportsCallbackCache[resource]) {
+							exportsCallbackCache[resource] = {};
+						}
+
+						if (!exportsCallbackCache[resource][k]) {
+							emit(getExportEventName(resource, k), (exportData) => {
+								exportsCallbackCache[resource][k] = exportData;
+							});
+
+							if (!exportsCallbackCache[resource][k]) {
+								throw new Error(`No such export ${k} in resource ${resource}`);
+							}
+						}
+
+						return (...args) => {
+							try {
+								const result = exportsCallbackCache[resource][k](...args);
+
+								if (Array.isArray(result) && result.length === 1) {
+									return result[0];
+								}
+
+								return result;
+							} catch (e) {
+								console.error(e);
+
+								throw new Error(`An error happened while calling export ${k} of resource ${resource} - see above for details`);
+							}
+						};
+					},
+
+					set() {
+						throw new Error('cannot set values on an export resource');
+					}
+				});
+			},
+
+			apply(t, self, args) {
+				if (args.length !== 2) {
+					throw new Error('this needs 2 arguments');
+				}
+
+				const [ exportName, func ] = args;
+
+				on(getExportEventName(GetCurrentResourceName(), exportName), (setCB) => {
+					setCB(func);
+				});
+			},
+
+			set() {
+				throw new Error('cannot set values on exports');
+			}
+		});
+	};
+
+	global.exports = createExports();
 })(this || window);
