@@ -1,24 +1,23 @@
--- NO TOUCHY, IF SOMETHING IS WRONG CONTACT KANERSPS! --
--- NO TOUCHY, IF SOMETHING IS WRONG CONTACT KANERSPS! --
--- NO TOUCHY, IF SOMETHING IS WRONG CONTACT KANERSPS! --
--- NO TOUCHY, IF SOMETHING IS WRONG CONTACT KANERSPS! --
+--       Licensed under: AGPLv3        --
+--  GNU AFFERO GENERAL PUBLIC LICENSE  --
+--     Version 3, 19 November 2007     --
 
 -- Global variables
 Users = {}
 commands = {}
 settings = {}
 settings.defaultSettings = {
-	['pvpEnabled'] = false,
-	['permissionDenied'] = false,
-	['debugInformation'] = false,
-	['startingCash'] = 0,
-	['startingBank'] = 15000,
-	['enableRankDecorators'] = false,
-	['moneyIcon'] = "$",
-	['nativeMoneySystem'] = false,
-	['commandDelimeter'] = '/',
-	['enableLogging'] = false,
-	['enableCustomData'] = GetConvar('es_enableCustomData', 'false')
+	['permissionDenied'] = GetConvar('es_permissionDenied', 'false'),
+	['startingCash'] = GetConvar('es_startingCash', '0'),
+	['startingBank'] = GetConvar('es_startingBank', '0'),
+	['enableRankDecorators'] = GetConvar('es_enableRankDecorators', 'false'),
+	['moneyIcon'] = GetConvar('es_moneyIcon', '$'),
+	['nativeMoneySystem'] = GetConvar('es_nativeMoneySystem', '0'),
+	['commandDelimeter'] = GetConvar('es_commandDelimeter', '/'),
+	['enableLogging'] = GetConvar('es_enableLogging', 'false'),
+	['enableCustomData'] = GetConvar('es_enableCustomData', 'false'),
+	['defaultDatabase'] = GetConvar('es_defaultDatabase', '1'),
+	['disableCommandHandler'] = GetConvar('es_disableCommandHandler', 'false')
 }
 settings.sessionSettings = {}
 commandSuggestions = {}
@@ -77,13 +76,13 @@ function doesLogExist(cb)
 end
 
 Citizen.CreateThread(function()
-	if settings.defaultSettings.enableLogging then doesLogExist(function()end) end
+	if settings.defaultSettings.enableLogging ~= "false" then doesLogExist(function()end) end
 	return
 end)
 
 
 function log(log)
-	if settings.defaultSettings.enableLogging then
+	if settings.defaultSettings.enableLogging ~= "false" then
 		Citizen.CreateThread(function()
 			local file = LoadResourceFile(GetCurrentResourceName(), "logs/" .. string.gsub(os.date('%x'), '(/)', '-') .. ".txt")
 			if file then

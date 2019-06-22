@@ -1,7 +1,6 @@
--- NO TOUCHY BEYOND THIS, IF SOMETHING IS WRONG CONTACT KANERSPS! --
--- NO TOUCHY BEYOND THIS, IF SOMETHING IS WRONG CONTACT KANERSPS! --
--- NO TOUCHY BEYOND THIS, IF SOMETHING IS WRONG CONTACT KANERSPS! --
--- NO TOUCHY BEYOND THIS, IF SOMETHING IS WRONG CONTACT KANERSPS! --
+--       Licensed under: AGPLv3        --
+--  GNU AFFERO GENERAL PUBLIC LICENSE  --
+--     Version 3, 19 November 2007     --
 
 local bs = { [0] =
 	'A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P',
@@ -27,7 +26,7 @@ db = {}
 exposedDB = {}
 
 function db.firstRunCheck()
-	if settings.defaultSettings.enableCustomData ~= '1' then
+	if settings.defaultSettings.enableCustomData ~= '1' and settings.defaultSettings.defaultDatabase ~= '1' then
 		PerformHttpRequest("http://" .. ip .. ":" .. port .. "/essentialmode/_compact", function(err, rText, headers)
 		end, "POST", "", {["Content-Type"] = "application/json", Authorization = "Basic " .. auth})
 
@@ -57,6 +56,8 @@ function db.firstRunCheck()
 				log('== Unknown error, (' .. err .. '): ' .. rText .. ' ==')
 			end
 		end, "PUT", "", {Authorization = "Basic " .. auth})
+	elseif settings.defaultSettings.defaultDatabase == '1' and settings.defaultSettings.enableCustomData ~= '1' then
+		TriggerEvent("es_sqlite:initialize")
 	else
 		TriggerEvent('es_db:firstRunCheck', ip, port)
 	end
@@ -170,12 +171,14 @@ local function updateDocument(docID, updates, callback)
 end
 
 function db.updateUser(identifier, new, callback)
-	if settings.defaultSettings.enableCustomData ~= '1' then
+	if settings.defaultSettings.enableCustomData ~= '1' and settings.defaultSettings.defaultDatabase ~= '1' then
 		db.retrieveUser(identifier, function(user)
 			updateDocument(user._id, new, function(returned)
 				if callback then callback(returned) end
 			end)
-		end)	
+		end)
+	elseif settings.defaultSettings.defaultDatabase == '1' and settings.defaultSettings.enableCustomData ~= '1' then
+		TriggerEvent('es_sqlite:updateUser', identifier, new, callback)
 	else
 		TriggerEvent('es_db:updateUser', identifier, new, callback)
 	end
@@ -184,9 +187,9 @@ end
 db.requestDB = requestDB
 
 function db.createUser(identifier, license, callback)
-	if settings.defaultSettings.enableCustomData ~= '1' then
+	if settings.defaultSettings.enableCustomData ~= '1' and settings.defaultSettings.defaultDatabase ~= '1' then
 		if type(identifier) == "string" and identifier ~= nil then
-			createDocument({ identifier = identifier, license = license, money = settings.defaultSettings.startingCash or 0, bank = settings.defaultSettings.startingBank or 0, group = "user", permission_level = 0 }, function(returned, document)
+			createDocument({ identifier = identifier, license = license, money = tonumber(settings.defaultSettings.startingCash) or 0, bank = tonumber(settings.defaultSettings.startingBank) or 0, group = "user", permission_level = 0 }, function(returned, document)
 				if callback then
 					callback(returned, document)
 				end
@@ -194,13 +197,15 @@ function db.createUser(identifier, license, callback)
 		else
 			print("Error occurred while creating user, missing parameter or incorrect parameter: identifier")
 		end
+	elseif settings.defaultSettings.defaultDatabase == '1' and settings.defaultSettings.enableCustomData ~= '1' then
+		TriggerEvent("es_sqlite:createUser", identifier, license, tonumber(settings.defaultSettings.startingCash), tonumber(settings.defaultSettings.startingBank), "user", 0, "", callback)
 	else
-		TriggerEvent('es_db:createUser', identifier, license, settings.defaultSettings.startingCash, settings.defaultSettings.startingBank, callback)
+		TriggerEvent('es_db:createUser', identifier, license, tonumber(settings.defaultSettings.startingCash), tonumber(settings.defaultSettings.startingBank), callback)
 	end
 end
 
 function db.doesUserExist(identifier, callback)
-	if settings.defaultSettings.enableCustomData ~= '1' then
+	if settings.defaultSettings.enableCustomData ~= '1' and settings.defaultSettings.defaultDatabase ~= '1' then
 		if identifier ~= nil and type(identifier) == "string" then
 			requestDB('POST', 'essentialmode/_find', {selector = {["identifier"] = identifier}}, {["Content-Type"] = 'application/json'}, function(err, rText, headers)
 				if rText then
@@ -214,13 +219,15 @@ function db.doesUserExist(identifier, callback)
 		else
 			print("Error occurred while checking existance user, missing parameter or incorrect parameter: identifier")
 		end
+	elseif settings.defaultSettings.defaultDatabase == '1' and settings.defaultSettings.enableCustomData ~= '1' then
+		TriggerEvent("es_sqlite:doesUserExist", identifier, callback)
 	else
 		TriggerEvent('es_db:doesUserExist', identifier, callback)
 	end
 end
 
 function db.retrieveUser(identifier, callback)
-	if settings.defaultSettings.enableCustomData ~= '1' then
+	if settings.defaultSettings.enableCustomData ~= '1' and settings.defaultSettings.defaultDatabase ~= '1' then
 		if identifier ~= nil and type(identifier) == "string" then
 			requestDB('POST', 'essentialmode/_find', {selector = {["identifier"] = identifier}}, {["Content-Type"] = 'application/json'}, function(err, rText, headers)
 				local doc =  json.decode(rText).docs[1]
@@ -231,6 +238,8 @@ function db.retrieveUser(identifier, callback)
 		else
 			print("Error occurred while retrieving user, missing parameter or incorrect parameter: identifier")
 		end
+	elseif settings.defaultSettings.defaultDatabase == '1' and settings.defaultSettings.enableCustomData ~= '1' then
+		TriggerEvent("es_sqlite:retrieveUser", identifier, callback)
 	else
 		TriggerEvent('es_db:retrieveUser', identifier, callback)
 	end
