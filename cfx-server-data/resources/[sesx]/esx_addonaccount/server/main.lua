@@ -85,4 +85,7 @@ AddEventHandler('esx:playerLoaded', function(playerId, xPlayer)
 	end
 
 	xPlayer.set('addonAccounts', addonAccounts)
+	if xPlayer ~= nil then
+-- do whatever threw the error before
+end
 end)
