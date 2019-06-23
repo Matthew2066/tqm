@@ -22,7 +22,7 @@
     "#78909C"
   ],
 
-  "useFormatNumberFrance": true,
+  "useFormatNumberFrance": false,
 
   "useWebRTCVocal": false,
   "RTCConfig": {
